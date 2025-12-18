@@ -65,6 +65,7 @@ def _build_figure(
             y=raw,
             mode="lines",
             name="Original",
+            uid="series::raw",
             line=dict(width=2),
         )
     )
@@ -76,6 +77,7 @@ def _build_figure(
                 y=y,
                 mode="lines",
                 name=name,
+                uid=f"series::{name}",
                 line=dict(width=2),
             )
         )
@@ -104,10 +106,13 @@ def _init_state() -> None:
     st.session_state.setdefault("fs_hz", 1.0)
     st.session_state.setdefault("cutoff_hz", 0.2)
     st.session_state.setdefault("order", 4)
-    st.session_state.setdefault("enable_kf", False)
-    st.session_state.setdefault("q", 1e-4)
-    st.session_state.setdefault("r", 1e-3)
+    st.session_state.setdefault("kf_enable", False)
+    st.session_state.setdefault("kf_q", 1e-4)
+    st.session_state.setdefault("kf_r", 1e-3)
     st.session_state.setdefault("zoom_revision", 0)
+    st.session_state.setdefault("use_sample", True)
+    st.session_state.setdefault("time_col", "(index)")
+    st.session_state.setdefault("signal_col", "")
 
 
 st.set_page_config(
@@ -152,7 +157,7 @@ with st.sidebar:
         help="Subí un CSV con columnas numéricas. Opcionalmente incluí una columna de tiempo (por ejemplo: t en segundos).",
     )
 
-    use_sample = st.toggle("Usar ejemplo", value=(uploaded is None))
+    use_sample = st.toggle("Usar ejemplo", key="use_sample", value=(uploaded is None))
 
     if uploaded is None and not use_sample:
         st.info("Subí un CSV o activá el ejemplo.")
@@ -170,10 +175,22 @@ with st.sidebar:
     cols = list(df.columns)
 
     default_time_idx = 0 if "t" in cols else None
+
+    time_options = ["(index)"] + cols
+    desired_time_col = str(st.session_state.get("time_col", "(index)"))
+    if desired_time_col not in time_options:
+        desired_time_col = "t" if "t" in cols else "(index)"
+        st.session_state["time_col"] = desired_time_col
+
     time_col = st.selectbox(
         "Tiempo",
-        options=["(index)"] + cols,
-        index=(default_time_idx + 1) if default_time_idx is not None else 0,
+        options=time_options,
+        index=(
+            time_options.index(desired_time_col)
+            if desired_time_col in time_options
+            else ((default_time_idx + 1) if default_time_idx is not None else 0)
+        ),
+        key="time_col",
         help="Si no tenés columna de tiempo, usá (index) y configurá fs (Hz) manualmente.",
     )
 
@@ -210,10 +227,21 @@ with st.sidebar:
         if "X acceleration (Gs)" in numeric_cols
         else numeric_cols[0]
     )
+
+    desired_signal_col = str(st.session_state.get("signal_col", ""))
+    if desired_signal_col not in numeric_cols:
+        desired_signal_col = default_signal
+        st.session_state["signal_col"] = desired_signal_col
+
     signal_col = st.selectbox(
         "Señal",
         options=numeric_cols,
-        index=numeric_cols.index(default_signal),
+        index=(
+            numeric_cols.index(desired_signal_col)
+            if desired_signal_col in numeric_cols
+            else numeric_cols.index(default_signal)
+        ),
+        key="signal_col",
         help="Columna a graficar/filtrar.",
     )
 
@@ -264,7 +292,7 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
                 0.01, float(st.session_state.get("fs_hz", 1.0)) * 0.20
             )
             st.session_state["order"] = 3
-            st.session_state["enable_kf"] = False
+            st.session_state["kf_enable"] = False
         elif preset == "Suavizado medio":
             st.session_state["enable_ma"] = True
             st.session_state["ma_window"] = 31
@@ -273,7 +301,7 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
                 0.01, float(st.session_state.get("fs_hz", 1.0)) * 0.12
             )
             st.session_state["order"] = 4
-            st.session_state["enable_kf"] = False
+            st.session_state["kf_enable"] = False
         elif preset == "Suavizado fuerte":
             st.session_state["enable_ma"] = True
             st.session_state["ma_window"] = 61
@@ -282,7 +310,7 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
                 0.01, float(st.session_state.get("fs_hz", 1.0)) * 0.06
             )
             st.session_state["order"] = 5
-            st.session_state["enable_kf"] = False
+            st.session_state["kf_enable"] = False
 
     enable_ma = st.toggle(
         "Moving average", key="enable_ma", help="Promedia una ventana de muestras."
@@ -350,15 +378,15 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
         **_value_kw("order", int(st.session_state.get("order", 4))),
     )
 
-    enable_kf = st.toggle("Kalman (1D)", key="enable_kf")
+    enable_kf = st.toggle("Kalman (1D)", key="kf_enable")
     q = st.number_input(
         "q",
         min_value=1e-12,
         step=1e-4,
         format="%.12f",
         disabled=not enable_kf,
-        key="q",
-        **_value_kw("q", float(st.session_state.get("q", 1e-4))),
+        key="kf_q",
+        **_value_kw("kf_q", float(st.session_state.get("kf_q", 1e-4))),
     )
     r = st.number_input(
         "r",
@@ -366,8 +394,8 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
         step=1e-4,
         format="%.12f",
         disabled=not enable_kf,
-        key="r",
-        **_value_kw("r", float(st.session_state.get("r", 1e-3))),
+        key="kf_r",
+        **_value_kw("kf_r", float(st.session_state.get("kf_r", 1e-3))),
     )
 
     st.markdown("---")
