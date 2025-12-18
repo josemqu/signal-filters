@@ -1,2 +1,4 @@
-__pycache__
+__pycache__/
+*.pyc
+.signal_filters_demo_state.json
 .venv

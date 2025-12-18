@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -8,6 +11,86 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from filters import kalman_1d, low_pass_butterworth, moving_average
+
+
+_PERSISTED_STATE_VERSION = 1
+_PERSIST_KEYS: tuple[str, ...] = (
+    "preset",
+    "enable_ma",
+    "ma_window",
+    "enable_lp",
+    "fs_hz",
+    "cutoff_hz",
+    "order",
+    "kf_enable",
+    "kf_q",
+    "kf_r",
+    "use_sample",
+    "time_col",
+    "signal_col",
+    "secondary_signal_cols",
+)
+
+
+def _persisted_state_path() -> Path:
+    return Path(__file__).with_name(".signal_filters_demo_state.json")
+
+
+def _load_persisted_state() -> dict:
+    p = _persisted_state_path()
+    try:
+        if not p.exists():
+            return {}
+        payload = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {}
+        if payload.get("version") != _PERSISTED_STATE_VERSION:
+            return {}
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def _current_persistable_state() -> dict:
+    data: dict = {}
+    for k in _PERSIST_KEYS:
+        if k in st.session_state:
+            data[k] = st.session_state.get(k)
+    return data
+
+
+def _maybe_persist_state() -> None:
+    data = _current_persistable_state()
+    try:
+        fingerprint = json.dumps(data, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        fingerprint = None
+
+    if (
+        fingerprint is not None
+        and st.session_state.get("_persist_fingerprint") == fingerprint
+    ):
+        return
+
+    p = _persisted_state_path()
+    try:
+        p.write_text(
+            json.dumps(
+                {"version": _PERSISTED_STATE_VERSION, "data": data},
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if fingerprint is not None:
+            st.session_state["_persist_fingerprint"] = fingerprint
+    except Exception:
+        return
 
 
 def _is_numeric_series(s: pd.Series) -> bool:
@@ -139,6 +222,12 @@ def _build_figure(
 
 
 def _init_state() -> None:
+    persisted = _load_persisted_state()
+    if isinstance(persisted, dict):
+        for k, v in persisted.items():
+            if k not in st.session_state and k in _PERSIST_KEYS:
+                st.session_state[k] = v
+
     st.session_state.setdefault("preset", "Custom")
     st.session_state.setdefault("enable_ma", True)
     st.session_state.setdefault("ma_window", 21)
@@ -535,6 +624,8 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
         st.session_state["zoom_revision"] = (
             int(st.session_state.get("zoom_revision", 0)) + 1
         )
+
+_maybe_persist_state()
 
 st.subheader("Gráfico")
 
