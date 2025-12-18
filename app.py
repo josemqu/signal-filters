@@ -379,7 +379,9 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
     if st.button(
         "Reset zoom", use_container_width=True, help="Resetea el zoom/pan del gráfico."
     ):
-        st.session_state.zoom_revision += 1
+        st.session_state["zoom_revision"] = (
+            int(st.session_state.get("zoom_revision", 0)) + 1
+        )
 
 st.subheader("Gráfico")
 
@@ -478,9 +480,7 @@ x_axis_title = f"{x_label} ({time_unit})" if str(time_unit).strip() else x_label
 y_label = str(signal_col)
 y_axis_title = f"{y_label} ({signal_unit})" if str(signal_unit).strip() else y_label
 
-ui_revision = (
-    f"zoom:{st.session_state.zoom_revision}|time:{time_col}|signal:{signal_col}"
-)
+ui_revision = f"zoom:{int(st.session_state.get('zoom_revision', 0))}"
 fig = _build_figure(
     t_view,
     y_view,
@@ -490,7 +490,7 @@ fig = _build_figure(
     y_axis_title=y_axis_title,
 )
 with a:
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="signal_chart")
 
 with st.expander("Preview de datos"):
     st.dataframe(df.head(50), use_container_width=True)
