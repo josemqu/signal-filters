@@ -54,12 +54,32 @@ def _value_kw(key: str, default):
 def _build_figure(
     t: np.ndarray,
     raw: np.ndarray,
+    secondary_raw: list[tuple[str, str, np.ndarray, bool]],
     series: list[tuple[str, str, np.ndarray, bool]],
     ui_revision: str,
     x_axis_title: str,
     y_axis_title: str,
 ) -> go.Figure:
     fig = go.Figure()
+
+    fixed_colors = {
+        "series::raw": "rgba(180, 190, 200, 0.70)",
+        "series::ma": "rgba(80, 200, 120, 0.95)",
+        "series::lp": "rgba(96, 165, 250, 0.95)",
+        "series::kf": "rgba(196, 181, 253, 0.95)",
+    }
+    secondary_palette = [
+        "rgba(251, 191, 36, 0.90)",
+        "rgba(244, 114, 182, 0.90)",
+        "rgba(45, 212, 191, 0.90)",
+        "rgba(251, 113, 133, 0.90)",
+        "rgba(52, 211, 153, 0.90)",
+        "rgba(249, 115, 22, 0.90)",
+        "rgba(56, 189, 248, 0.90)",
+        "rgba(167, 139, 250, 0.90)",
+        "rgba(163, 230, 53, 0.90)",
+        "rgba(148, 163, 184, 0.90)",
+    ]
 
     fig.add_trace(
         go.Scatter(
@@ -68,11 +88,12 @@ def _build_figure(
             mode="lines",
             name="Original",
             uid="series::raw",
-            line=dict(width=2),
+            line=dict(width=2, color=fixed_colors.get("series::raw")),
         )
     )
 
-    for name, uid, y, visible in series:
+    for idx, (name, uid, y, visible) in enumerate(secondary_raw):
+        color = secondary_palette[idx % len(secondary_palette)]
         fig.add_trace(
             go.Scatter(
                 x=t,
@@ -81,7 +102,21 @@ def _build_figure(
                 name=name,
                 uid=uid,
                 visible=visible,
-                line=dict(width=2),
+                line=dict(width=2, dash="dot", color=color),
+            )
+        )
+
+    for name, uid, y, visible in series:
+        color = fixed_colors.get(uid)
+        fig.add_trace(
+            go.Scatter(
+                x=t,
+                y=y,
+                mode="lines",
+                name=name,
+                uid=uid,
+                visible=visible,
+                line=dict(width=2, color=color),
             )
         )
 
@@ -118,6 +153,7 @@ def _init_state() -> None:
     st.session_state.setdefault("use_sample", True)
     st.session_state.setdefault("time_col", "(index)")
     st.session_state.setdefault("signal_col", "")
+    st.session_state.setdefault("secondary_signal_cols", [])
 
 
 st.set_page_config(
@@ -187,40 +223,45 @@ with st.sidebar:
         desired_time_col = "t" if "t" in cols else "(index)"
         st.session_state["time_col"] = desired_time_col
 
-    time_col = st.selectbox(
-        "Tiempo",
-        options=time_options,
-        index=(
-            time_options.index(desired_time_col)
-            if desired_time_col in time_options
-            else ((default_time_idx + 1) if default_time_idx is not None else 0)
-        ),
-        key="time_col",
-        help="Si no tenés columna de tiempo, usá (index) y configurá fs (Hz) manualmente.",
-    )
+    t1, t2 = st.columns([0.68, 0.32], gap="small")
+    with t1:
+        time_col = st.selectbox(
+            "Tiempo",
+            options=time_options,
+            index=(
+                time_options.index(desired_time_col)
+                if desired_time_col in time_options
+                else ((default_time_idx + 1) if default_time_idx is not None else 0)
+            ),
+            key="time_col",
+            help="Si no tenés columna de tiempo, usá (index) y configurá fs (Hz) manualmente.",
+        )
 
     if time_col == "(index)":
-        time_unit = st.text_input(
-            "Unidad tiempo",
-            value="samples",
-            help="Como no hay columna de tiempo, el eje X usa el índice. Podés poner 'samples' o dejarlo vacío.",
-        )
+        with t2:
+            time_unit = st.text_input(
+                "Unidad",
+                value="samples",
+                help="Como no hay columna de tiempo, el eje X usa el índice. Podés poner 'samples' o dejarlo vacío.",
+            )
     else:
         inferred_t_unit = _infer_unit_from_column_name(time_col)
         if inferred_t_unit is None:
             _get_unit_for_column(time_col, fallback="s")
-            time_unit = st.text_input(
-                "Unidad tiempo",
-                key=f"unit::{time_col}",
-                help="No se detectó unidad asegurada en el nombre. Ej: 's', 'ms'.",
-            )
+            with t2:
+                time_unit = st.text_input(
+                    "Unidad",
+                    key=f"unit::{time_col}",
+                    help="No se detectó unidad asegurada en el nombre. Ej: 's', 'ms'.",
+                )
         else:
             _get_unit_for_column(time_col, fallback=inferred_t_unit)
-            time_unit = st.text_input(
-                "Unidad tiempo",
-                key=f"unit::{time_col}",
-                help="Unidad detectada desde el nombre (podés sobrescribirla).",
-            )
+            with t2:
+                time_unit = st.text_input(
+                    "Unidad",
+                    key=f"unit::{time_col}",
+                    help="Unidad detectada desde el nombre (podés sobrescribirla).",
+                )
 
     numeric_cols = [c for c in cols if _is_numeric_series(df[c])]
     if not numeric_cols:
@@ -242,33 +283,112 @@ with st.sidebar:
         desired_signal_col = default_signal
         st.session_state["signal_col"] = desired_signal_col
 
-    signal_col = st.selectbox(
-        "Señal",
-        options=numeric_cols,
-        index=(
-            numeric_cols.index(desired_signal_col)
-            if desired_signal_col in numeric_cols
-            else numeric_cols.index(default_signal)
-        ),
-        key="signal_col",
-        help="Columna a graficar/filtrar.",
-    )
+    s1, s2 = st.columns([0.68, 0.32], gap="small")
+    with s1:
+        signal_col = st.selectbox(
+            "Señal",
+            options=numeric_cols,
+            index=(
+                numeric_cols.index(desired_signal_col)
+                if desired_signal_col in numeric_cols
+                else numeric_cols.index(default_signal)
+            ),
+            key="signal_col",
+            help="Columna a graficar/filtrar.",
+        )
 
     inferred_y_unit = _infer_unit_from_column_name(signal_col)
     if inferred_y_unit is None:
         _get_unit_for_column(signal_col, fallback="")
-        signal_unit = st.text_input(
-            "Unidad señal",
-            key=f"unit::{signal_col}",
-            help="Ej: 'm/s^2', 'g', 'Gs'.",
-        )
+        with s2:
+            signal_unit = st.text_input(
+                "Unidad",
+                key=f"unit::{signal_col}",
+                help="Ej: 'm/s^2', 'g', 'Gs'.",
+            )
     else:
         _get_unit_for_column(signal_col, fallback=inferred_y_unit)
-        signal_unit = st.text_input(
-            "Unidad señal",
-            key=f"unit::{signal_col}",
-            help="Unidad detectada desde el nombre (podés sobrescribirla).",
+        with s2:
+            signal_unit = st.text_input(
+                "Unidad",
+                key=f"unit::{signal_col}",
+                help="Unidad detectada desde el nombre (podés sobrescribirla).",
+            )
+
+    h1, h2 = st.columns([0.86, 0.14], gap="small")
+    with h1:
+        st.markdown("#### Series secundarias")
+    with h2:
+        add_secondary = st.button(
+            "+", key="secondary_add", help="Agregar serie secundaria"
         )
+
+    if add_secondary:
+        existing = set(st.session_state.get("secondary_signal_cols", []))
+        existing.add(signal_col)
+        candidate = None
+        for c in numeric_cols:
+            if c not in existing:
+                candidate = c
+                break
+        if candidate is None:
+            candidate = signal_col
+        st.session_state.secondary_signal_cols = list(
+            st.session_state.get("secondary_signal_cols", [])
+        ) + [candidate]
+
+    secondary_cols: list[str] = list(st.session_state.get("secondary_signal_cols", []))
+    cleaned_secondary: list[str] = []
+    for c in secondary_cols:
+        if c in numeric_cols and c != signal_col:
+            cleaned_secondary.append(c)
+    if cleaned_secondary != secondary_cols:
+        st.session_state.secondary_signal_cols = cleaned_secondary
+        secondary_cols = cleaned_secondary
+
+    for i, col in enumerate(list(secondary_cols)):
+        c1, c2, c3 = st.columns([0.62, 0.30, 0.08], gap="small")
+
+        with c1:
+            selected = st.selectbox(
+                "",
+                options=numeric_cols,
+                index=numeric_cols.index(col) if col in numeric_cols else 0,
+                key=f"secondary_signal_col::{i}",
+                label_visibility="collapsed",
+            )
+
+        if selected != col:
+            secondary_cols[i] = selected
+
+        inferred_unit = _infer_unit_from_column_name(secondary_cols[i])
+        _get_unit_for_column(
+            secondary_cols[i], fallback=("" if inferred_unit is None else inferred_unit)
+        )
+        with c2:
+            _ = st.text_input(
+                "",
+                key=f"unit::{secondary_cols[i]}",
+                label_visibility="collapsed",
+                placeholder="Unidad",
+            )
+
+        with c3:
+            if st.button("×", key=f"secondary_remove::{i}", help="Quitar"):
+                secondary_cols.pop(i)
+                st.session_state.secondary_signal_cols = secondary_cols
+                st.rerun()
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for c in secondary_cols:
+        if c == signal_col:
+            continue
+        if c in seen:
+            continue
+        seen.add(c)
+        deduped.append(c)
+    st.session_state.secondary_signal_cols = deduped
 
     with st.expander("Guía rápida", expanded=False):
         st.markdown(
@@ -467,6 +587,22 @@ else:
     t_view = t
     y_view = y
 
+secondary_series: list[tuple[str, str, np.ndarray, bool]] = []
+secondary_cols = list(st.session_state.get("secondary_signal_cols", []))
+for i, col in enumerate(secondary_cols):
+    if col == signal_col or col not in df.columns:
+        continue
+    y2_raw = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+    y2 = y2_raw[valid]
+    if t.size > max_points:
+        y2_view = y2[idx]
+    else:
+        y2_view = y2
+
+    unit2 = _get_unit_for_column(col, fallback="")
+    name = f"{col} ({unit2})" if str(unit2).strip() else str(col)
+    secondary_series.append((name, f"series::secondary::{i}", y2_view, True))
+
 series: list[tuple[str, str, np.ndarray, bool]] = []
 
 nan_y = np.full_like(y_view, np.nan, dtype=float)
@@ -537,6 +673,7 @@ ui_revision = f"zoom:{int(st.session_state.get('zoom_revision', 0))}"
 fig = _build_figure(
     t_view,
     y_view,
+    secondary_series,
     series,
     ui_revision=ui_revision,
     x_axis_title=x_axis_title,
