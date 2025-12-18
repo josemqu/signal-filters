@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 from filters import kalman_1d, low_pass_butterworth, moving_average
 
@@ -52,7 +53,7 @@ def _value_kw(key: str, default):
 def _build_figure(
     t: np.ndarray,
     raw: np.ndarray,
-    series: list[tuple[str, str, np.ndarray]],
+    series: list[tuple[str, str, np.ndarray, bool]],
     ui_revision: str,
     x_axis_title: str,
     y_axis_title: str,
@@ -70,7 +71,7 @@ def _build_figure(
         )
     )
 
-    for name, uid, y in series:
+    for name, uid, y, visible in series:
         fig.add_trace(
             go.Scatter(
                 x=t,
@@ -78,6 +79,7 @@ def _build_figure(
                 mode="lines",
                 name=name,
                 uid=uid,
+                visible=visible,
                 line=dict(width=2),
             )
         )
@@ -462,7 +464,21 @@ else:
     t_view = t
     y_view = y
 
-series: list[tuple[str, str, np.ndarray]] = []
+series: list[tuple[str, str, np.ndarray, bool]] = []
+
+nan_y = np.full_like(y_view, np.nan, dtype=float)
+
+ma_name = "Moving avg"
+ma_y = nan_y
+ma_visible = False
+
+lp_name = "Low-pass"
+lp_y = nan_y
+lp_visible = False
+
+kf_name = "Kalman"
+kf_y = nan_y
+kf_visible = False
 
 if enable_ma:
     if ma_window > y_view.size:
@@ -472,49 +488,41 @@ if enable_ma:
         ma_window_eff = int(max(1, y_view.size // 2 * 2 + 1))
     else:
         ma_window_eff = int(ma_window)
-    series.append(
-        (
-            f"Moving avg (w={ma_window_eff})",
-            "series::ma",
-            moving_average(y_view, ma_window_eff),
-        )
-    )
+    ma_name = f"Moving avg (w={ma_window_eff})"
+    ma_y = moving_average(y_view, ma_window_eff)
+    ma_visible = True
 
 if enable_lp:
     if float(cutoff_hz) >= 0.5 * float(fs_hz):
         st.error("Low-pass: cutoff debe ser < fs/2 (Nyquist). Bajá cutoff o subí fs.")
     else:
         try:
-            series.append(
-                (
-                    f"Low-pass (fc={cutoff_hz:g}Hz, order={order})",
-                    "series::lp",
-                    low_pass_butterworth(
-                        y_view,
-                        fs_hz=float(fs_hz),
-                        cutoff_hz=float(cutoff_hz),
-                        order=int(order),
-                    ),
-                )
+            lp_name = f"Low-pass (fc={cutoff_hz:g}Hz, order={order})"
+            lp_y = low_pass_butterworth(
+                y_view,
+                fs_hz=float(fs_hz),
+                cutoff_hz=float(cutoff_hz),
+                order=int(order),
             )
+            lp_visible = True
         except Exception as e:
             st.warning(f"Low-pass no se pudo calcular: {e}")
 
 if enable_kf:
     try:
-        series.append(
-            (
-                f"Kalman (q={_safe_float(q, 0):g}, r={_safe_float(r, 0):g})",
-                "series::kf",
-                kalman_1d(
-                    y_view,
-                    q=float(q),
-                    r=float(r),
-                ),
-            )
+        kf_name = f"Kalman (q={_safe_float(q, 0):g}, r={_safe_float(r, 0):g})"
+        kf_y = kalman_1d(
+            y_view,
+            q=float(q),
+            r=float(r),
         )
+        kf_visible = True
     except Exception as e:
         st.warning(f"Kalman no se pudo calcular: {e}")
+
+series.append((ma_name, "series::ma", ma_y, ma_visible))
+series.append((lp_name, "series::lp", lp_y, lp_visible))
+series.append((kf_name, "series::kf", kf_y, kf_visible))
 
 x_label = "index" if time_col == "(index)" else str(time_col)
 x_axis_title = f"{x_label} ({time_unit})" if str(time_unit).strip() else x_label
@@ -533,6 +541,113 @@ fig = _build_figure(
 )
 with a:
     st.plotly_chart(fig, use_container_width=True, key="signal_chart")
+
+    components.html(
+        f"""
+<script>
+(() => {{
+  const RANGE_KEY = "signal_filters_demo::signal_chart::ranges";
+  const REV_KEY = "signal_filters_demo::signal_chart::zoom_revision";
+  const currentRevision = {int(st.session_state.get("zoom_revision", 0))};
+
+  try {{
+    const storedRevisionRaw = window.localStorage.getItem(REV_KEY);
+    const storedRevision = storedRevisionRaw === null ? null : Number(storedRevisionRaw);
+    if (storedRevision !== currentRevision) {{
+      window.localStorage.setItem(REV_KEY, String(currentRevision));
+      window.localStorage.removeItem(RANGE_KEY);
+    }}
+  }} catch (e) {{
+    return;
+  }}
+
+  const applyRanges = (gd) => {{
+    let payload = null;
+    try {{
+      const raw = window.localStorage.getItem(RANGE_KEY);
+      if (!raw) return;
+      payload = JSON.parse(raw);
+    }} catch (e) {{
+      return;
+    }}
+
+    const update = {{}};
+    if (payload && payload.x0 != null && payload.x1 != null) {{
+      update["xaxis.range"] = [payload.x0, payload.x1];
+      update["xaxis.autorange"] = false;
+    }}
+    if (payload && payload.y0 != null && payload.y1 != null) {{
+      update["yaxis.range"] = [payload.y0, payload.y1];
+      update["yaxis.autorange"] = false;
+    }}
+    if (Object.keys(update).length === 0) return;
+    try {{
+      window.Plotly.relayout(gd, update);
+    }} catch (e) {{
+    }}
+  }};
+
+  const attach = (gd) => {{
+    if (!gd || gd.__zoomPersistAttached) return;
+    gd.__zoomPersistAttached = true;
+
+    gd.on("plotly_relayout", (ev) => {{
+      try {{
+        if (!ev) return;
+        if (ev["xaxis.autorange"] === true || ev["yaxis.autorange"] === true) {{
+          window.localStorage.removeItem(RANGE_KEY);
+          return;
+        }}
+
+        let x0 = null;
+        let x1 = null;
+        let y0 = null;
+        let y1 = null;
+
+        if (ev["xaxis.range[0]"] != null && ev["xaxis.range[1]"] != null) {{
+          x0 = ev["xaxis.range[0]"]; x1 = ev["xaxis.range[1]"]; 
+        }} else if (Array.isArray(ev["xaxis.range"]) && ev["xaxis.range"].length === 2) {{
+          x0 = ev["xaxis.range"][0]; x1 = ev["xaxis.range"][1];
+        }}
+
+        if (ev["yaxis.range[0]"] != null && ev["yaxis.range[1]"] != null) {{
+          y0 = ev["yaxis.range[0]"]; y1 = ev["yaxis.range[1]"]; 
+        }} else if (Array.isArray(ev["yaxis.range"]) && ev["yaxis.range"].length === 2) {{
+          y0 = ev["yaxis.range"][0]; y1 = ev["yaxis.range"][1];
+        }}
+
+        if (x0 == null && x1 == null && y0 == null && y1 == null) return;
+        window.localStorage.setItem(RANGE_KEY, JSON.stringify({{x0, x1, y0, y1}}));
+      }} catch (e) {{
+      }}
+    }});
+
+    applyRanges(gd);
+  }};
+
+  const findGraph = () => {{
+    const nodes = document.querySelectorAll('div[data-testid="stPlotlyChart"] .plotly-graph-div');
+    if (!nodes || nodes.length === 0) return null;
+    return nodes[nodes.length - 1];
+  }};
+
+  let tries = 0;
+  const timer = window.setInterval(() => {{
+    tries += 1;
+    const gd = findGraph();
+    if (gd && window.Plotly && typeof gd.on === "function") {{
+      attach(gd);
+      window.clearInterval(timer);
+    }} else if (tries > 80) {{
+      window.clearInterval(timer);
+    }}
+  }}, 100);
+}})();
+</script>
+        """,
+        height=0,
+        width=0,
+    )
 
 with st.expander("Preview de datos"):
     st.dataframe(df.head(50), use_container_width=True)
