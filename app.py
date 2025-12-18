@@ -398,11 +398,7 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
         **_value_kw("kf_r", float(st.session_state.get("kf_r", 1e-3))),
     )
 
-    st.markdown("---")
-    st.markdown("### Vista")
-    max_points = st.slider(
-        "Máx puntos", min_value=500, max_value=50000, value=8000, step=500
-    )
+    max_points = 8000
 
     if st.button(
         "Reset zoom", use_container_width=True, help="Resetea el zoom/pan del gráfico."
