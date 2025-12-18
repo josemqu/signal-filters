@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -85,7 +86,7 @@ def _build_figure(
         )
 
     fig.update_layout(
-        template="plotly_white",
+        template="plotly_dark",
         height=560,
         margin=dict(l=10, r=10, t=10, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
@@ -93,6 +94,8 @@ def _build_figure(
         xaxis_title=x_axis_title,
         yaxis_title=y_axis_title,
         font=dict(size=12),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
     )
     fig.update_xaxes(showgrid=True, zeroline=False)
     fig.update_yaxes(showgrid=True, zeroline=False)
@@ -540,15 +543,26 @@ fig = _build_figure(
     y_axis_title=y_axis_title,
 )
 with a:
-    st.plotly_chart(fig, use_container_width=True, key="signal_chart")
+    html = pio.to_html(
+        fig,
+        include_plotlyjs="cdn",
+        full_html=False,
+        config={"responsive": True, "displaylogo": False},
+        div_id="signal_chart_plotly",
+    )
 
     components.html(
         f"""
+<div id="signal_chart_wrapper" style="width: 100%; visibility: hidden;">
+  {html}
+</div>
+
 <script>
 (() => {{
   const RANGE_KEY = "signal_filters_demo::signal_chart::ranges";
   const REV_KEY = "signal_filters_demo::signal_chart::zoom_revision";
   const currentRevision = {int(st.session_state.get("zoom_revision", 0))};
+  const wrapper = document.getElementById("signal_chart_wrapper");
 
   try {{
     const storedRevisionRaw = window.localStorage.getItem(REV_KEY);
@@ -558,8 +572,18 @@ with a:
       window.localStorage.removeItem(RANGE_KEY);
     }}
   }} catch (e) {{
+    if (wrapper) wrapper.style.visibility = "visible";
     return;
   }}
+
+  const hasPersistedRanges = () => {{
+    try {{
+      const raw = window.localStorage.getItem(RANGE_KEY);
+      return !!raw;
+    }} catch (e) {{
+      return false;
+    }}
+  }};
 
   const applyRanges = (gd) => {{
     let payload = null;
@@ -622,31 +646,29 @@ with a:
       }}
     }});
 
-    applyRanges(gd);
-  }};
+    if (hasPersistedRanges()) {{
+      applyRanges(gd);
+    }}
 
-  const findGraph = () => {{
-    const nodes = document.querySelectorAll('div[data-testid="stPlotlyChart"] .plotly-graph-div');
-    if (!nodes || nodes.length === 0) return null;
-    return nodes[nodes.length - 1];
+    if (wrapper) wrapper.style.visibility = "visible";
   }};
 
   let tries = 0;
   const timer = window.setInterval(() => {{
     tries += 1;
-    const gd = findGraph();
+    const gd = document.getElementById("signal_chart_plotly");
     if (gd && window.Plotly && typeof gd.on === "function") {{
       attach(gd);
       window.clearInterval(timer);
     }} else if (tries > 80) {{
+      if (wrapper) wrapper.style.visibility = "visible";
       window.clearInterval(timer);
     }}
   }}, 100);
 }})();
 </script>
         """,
-        height=0,
-        width=0,
+        height=590,
     )
 
 with st.expander("Preview de datos"):
