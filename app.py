@@ -327,8 +327,8 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
     ma_window = st.slider(
         "Ventana MA",
         min_value=1,
-        max_value=501,
-        step=2,
+        max_value=100,
+        step=1,
         disabled=not enable_ma,
         key="ma_window",
         **_value_kw("ma_window", int(st.session_state.get("ma_window", 21))),
