@@ -43,6 +43,12 @@ def _get_unit_for_column(col: str, *, fallback: str = "") -> str:
     return str(st.session_state[key] or "")
 
 
+def _value_kw(key: str, default):
+    if key in st.session_state:
+        return {}
+    return {"value": default}
+
+
 def _build_figure(
     t: np.ndarray,
     raw: np.ndarray,
@@ -129,8 +135,8 @@ div[data-testid="stExpander"] details { background: transparent; }
 /* make sidebar a bit tighter */
 section[data-testid="stSidebar"] { width: 360px !important; }
 section[data-testid="stSidebar"] .block-container { padding-top: 0.75rem; }
-/* keep chart visible while scrolling */
-div[data-testid="stPlotlyChart"] { position: sticky; top: 0.75rem; z-index: 5; background: white; }
+/* keep chart visible while scrolling (avoid covering title/header) */
+div[data-testid="stPlotlyChart"] { position: sticky; top: 4.25rem; z-index: 1; background: transparent; }
 </style>
     """,
     unsafe_allow_html=True,
@@ -180,16 +186,16 @@ with st.sidebar:
     else:
         inferred_t_unit = _infer_unit_from_column_name(time_col)
         if inferred_t_unit is None:
+            _get_unit_for_column(time_col, fallback="s")
             time_unit = st.text_input(
                 "Unidad tiempo",
-                value=_get_unit_for_column(time_col, fallback="s"),
                 key=f"unit::{time_col}",
                 help="No se detectó unidad asegurada en el nombre. Ej: 's', 'ms'.",
             )
         else:
+            _get_unit_for_column(time_col, fallback=inferred_t_unit)
             time_unit = st.text_input(
                 "Unidad tiempo",
-                value=_get_unit_for_column(time_col, fallback=inferred_t_unit),
                 key=f"unit::{time_col}",
                 help="Unidad detectada desde el nombre (podés sobrescribirla).",
             )
@@ -199,7 +205,11 @@ with st.sidebar:
         st.error("No hay columnas numéricas para analizar.")
         st.stop()
 
-    default_signal = "X acceleration (Gs)" if "X acceleration (Gs)" in numeric_cols else numeric_cols[0]
+    default_signal = (
+        "X acceleration (Gs)"
+        if "X acceleration (Gs)" in numeric_cols
+        else numeric_cols[0]
+    )
     signal_col = st.selectbox(
         "Señal",
         options=numeric_cols,
@@ -209,16 +219,16 @@ with st.sidebar:
 
     inferred_y_unit = _infer_unit_from_column_name(signal_col)
     if inferred_y_unit is None:
+        _get_unit_for_column(signal_col, fallback="")
         signal_unit = st.text_input(
             "Unidad señal",
-            value=_get_unit_for_column(signal_col, fallback=""),
             key=f"unit::{signal_col}",
             help="Ej: 'm/s^2', 'g', 'Gs'.",
         )
     else:
+        _get_unit_for_column(signal_col, fallback=inferred_y_unit)
         signal_unit = st.text_input(
             "Unidad señal",
-            value=_get_unit_for_column(signal_col, fallback=inferred_y_unit),
             key=f"unit::{signal_col}",
             help="Unidad detectada desde el nombre (podés sobrescribirla).",
         )
@@ -244,19 +254,47 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
         help="Atajo didáctico: carga valores sugeridos.",
     )
 
+    if st.session_state.get("last_preset") != preset:
+        st.session_state.last_preset = preset
+        if preset == "Suavizado leve":
+            st.session_state["enable_ma"] = True
+            st.session_state["ma_window"] = 11
+            st.session_state["enable_lp"] = True
+            st.session_state["cutoff_hz"] = max(
+                0.01, float(st.session_state.get("fs_hz", 1.0)) * 0.20
+            )
+            st.session_state["order"] = 3
+            st.session_state["enable_kf"] = False
+        elif preset == "Suavizado medio":
+            st.session_state["enable_ma"] = True
+            st.session_state["ma_window"] = 31
+            st.session_state["enable_lp"] = True
+            st.session_state["cutoff_hz"] = max(
+                0.01, float(st.session_state.get("fs_hz", 1.0)) * 0.12
+            )
+            st.session_state["order"] = 4
+            st.session_state["enable_kf"] = False
+        elif preset == "Suavizado fuerte":
+            st.session_state["enable_ma"] = True
+            st.session_state["ma_window"] = 61
+            st.session_state["enable_lp"] = True
+            st.session_state["cutoff_hz"] = max(
+                0.01, float(st.session_state.get("fs_hz", 1.0)) * 0.06
+            )
+            st.session_state["order"] = 5
+            st.session_state["enable_kf"] = False
+
     enable_ma = st.toggle(
-        "Moving average",
-        key="enable_ma",
-        help="Promedia una ventana de muestras.",
+        "Moving average", key="enable_ma", help="Promedia una ventana de muestras."
     )
     ma_window = st.slider(
         "Ventana MA",
         min_value=1,
         max_value=501,
-        value=int(st.session_state.ma_window),
         step=2,
         disabled=not enable_ma,
         key="ma_window",
+        **_value_kw("ma_window", int(st.session_state.get("ma_window", 21))),
     )
 
     enable_lp = st.toggle(
@@ -279,11 +317,11 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
     fs_hz = st.number_input(
         "fs (Hz)",
         min_value=0.0001,
-        value=float(st.session_state.fs_hz),
         step=0.1,
         format="%.6f",
         disabled=not enable_lp,
         key="fs_hz",
+        **_value_kw("fs_hz", float(st.session_state.get("fs_hz", 1.0))),
     )
 
     if "cutoff_hz" not in st.session_state or st.session_state.cutoff_hz <= 0:
@@ -292,79 +330,60 @@ Esta app te deja comparar una **señal original** contra varias salidas de filtr
     cutoff_hz = st.number_input(
         "cutoff (Hz)",
         min_value=0.0001,
-        value=float(st.session_state.cutoff_hz),
         step=0.1,
         format="%.6f",
         disabled=not enable_lp,
         key="cutoff_hz",
+        **_value_kw(
+            "cutoff_hz",
+            float(st.session_state.get("cutoff_hz", min(5.0, float(fs_hz) * 0.2))),
+        ),
     )
 
     order = st.slider(
         "Orden",
         min_value=1,
         max_value=8,
-        value=int(st.session_state.order),
         step=1,
         disabled=not enable_lp,
         key="order",
+        **_value_kw("order", int(st.session_state.get("order", 4))),
     )
 
-    enable_kf = st.toggle(
-        "Kalman (1D)",
-        key="enable_kf",
-    )
+    enable_kf = st.toggle("Kalman (1D)", key="enable_kf")
     q = st.number_input(
         "q",
         min_value=1e-12,
-        value=float(st.session_state.q),
         step=1e-4,
         format="%.12f",
         disabled=not enable_kf,
         key="q",
+        **_value_kw("q", float(st.session_state.get("q", 1e-4))),
     )
     r = st.number_input(
         "r",
         min_value=1e-12,
-        value=float(st.session_state.r),
         step=1e-4,
         format="%.12f",
         disabled=not enable_kf,
         key="r",
+        **_value_kw("r", float(st.session_state.get("r", 1e-3))),
     )
-
-    if preset != "Custom":
-        if preset == "Suavizado leve":
-            st.session_state.enable_ma = True
-            st.session_state.ma_window = 11
-            st.session_state.enable_lp = True
-            st.session_state.cutoff_hz = max(0.01, float(st.session_state.fs_hz) * 0.20)
-            st.session_state.order = 3
-            st.session_state.enable_kf = False
-        elif preset == "Suavizado medio":
-            st.session_state.enable_ma = True
-            st.session_state.ma_window = 31
-            st.session_state.enable_lp = True
-            st.session_state.cutoff_hz = max(0.01, float(st.session_state.fs_hz) * 0.12)
-            st.session_state.order = 4
-            st.session_state.enable_kf = False
-        elif preset == "Suavizado fuerte":
-            st.session_state.enable_ma = True
-            st.session_state.ma_window = 61
-            st.session_state.enable_lp = True
-            st.session_state.cutoff_hz = max(0.01, float(st.session_state.fs_hz) * 0.06)
-            st.session_state.order = 5
-            st.session_state.enable_kf = False
 
     st.markdown("---")
     st.markdown("### Vista")
-    max_points = st.slider("Máx puntos", min_value=500, max_value=50000, value=8000, step=500)
+    max_points = st.slider(
+        "Máx puntos", min_value=500, max_value=50000, value=8000, step=500
+    )
+
+    if st.button(
+        "Reset zoom", use_container_width=True, help="Resetea el zoom/pan del gráfico."
+    ):
+        st.session_state.zoom_revision += 1
 
 st.subheader("Gráfico")
 
-a, b = st.columns([0.78, 0.22])
-with b:
-    if st.button("Reset zoom", use_container_width=True, help="Resetea el zoom/pan del gráfico."):
-        st.session_state.zoom_revision += 1
+a = st.container()
 
 y_raw = pd.to_numeric(df[signal_col], errors="coerce").to_numpy(dtype=float)
 
@@ -375,93 +394,103 @@ else:
     if not np.isfinite(t).any():
         t = np.arange(len(df), dtype=float)
 
-    valid = np.isfinite(t) & np.isfinite(y_raw)
-    t = t[valid]
-    y = y_raw[valid]
+valid = np.isfinite(t) & np.isfinite(y_raw)
+t = t[valid]
+y = y_raw[valid]
 
-    if t.size == 0:
-        st.error("No hay datos válidos para graficar.")
-        st.stop()
+if t.size == 0:
+    st.error("No hay datos válidos para graficar.")
+    st.stop()
 
-    if time_col != "(index)" and t.size >= 2:
-        if np.nanmin(np.diff(t)) <= 0:
-            st.warning("La columna de tiempo no es estrictamente creciente. El gráfico se muestra igual, pero fs/cutoff pueden ser engañosos.")
+if time_col != "(index)" and t.size >= 2:
+    if np.nanmin(np.diff(t)) <= 0:
+        st.warning(
+            "La columna de tiempo no es estrictamente creciente. El gráfico se muestra igual, pero fs/cutoff pueden ser engañosos."
+        )
 
-    missing_pct = 100.0 * (1.0 - float(valid.sum()) / float(len(df)))
-    dt_median = None
-    if t.size >= 2:
-        dts = np.diff(t)
-        dt_median = float(np.nanmedian(dts)) if np.isfinite(dts).any() else None
+missing_pct = 100.0 * (1.0 - float(valid.sum()) / float(len(df)))
+dt_median = None
+if t.size >= 2:
+    dts = np.diff(t)
+    dt_median = float(np.nanmedian(dts)) if np.isfinite(dts).any() else None
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Muestras", f"{t.size:,}")
-    m2.metric("Missing", f"{missing_pct:.2f}%")
-    if dt_median is not None and dt_median > 0:
-        m3.metric("dt mediana", f"{dt_median:.6g}")
-        m4.metric("fs estimada", f"{(1.0 / dt_median):.6g} Hz")
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Muestras", f"{t.size:,}")
+m2.metric("Missing", f"{missing_pct:.2f}%")
+if dt_median is not None and dt_median > 0:
+    m3.metric("dt mediana", f"{dt_median:.6g}")
+    m4.metric("fs estimada", f"{(1.0 / dt_median):.6g} Hz")
+else:
+    m3.metric("dt mediana", "-")
+    m4.metric("fs estimada", "-")
+
+if t.size > max_points:
+    idx = np.linspace(0, t.size - 1, num=max_points).astype(int)
+    t_view = t[idx]
+    y_view = y[idx]
+else:
+    t_view = t
+    y_view = y
+
+series: dict[str, np.ndarray] = {}
+
+if enable_ma:
+    if ma_window > y_view.size:
+        st.warning(
+            "Moving average: la ventana es mayor que la cantidad de puntos mostrados. Se ajustó automáticamente."
+        )
+        ma_window_eff = int(max(1, y_view.size // 2 * 2 + 1))
     else:
-        m3.metric("dt mediana", "-")
-        m4.metric("fs estimada", "-")
+        ma_window_eff = int(ma_window)
+    series[f"Moving avg (w={ma_window_eff})"] = moving_average(y_view, ma_window_eff)
 
-    if t.size > max_points:
-        idx = np.linspace(0, t.size - 1, num=max_points).astype(int)
-        t_view = t[idx]
-        y_view = y[idx]
+if enable_lp:
+    if float(cutoff_hz) >= 0.5 * float(fs_hz):
+        st.error("Low-pass: cutoff debe ser < fs/2 (Nyquist). Bajá cutoff o subí fs.")
     else:
-        t_view = t
-        y_view = y
-
-    series: dict[str, np.ndarray] = {}
-
-    if enable_ma:
-        if ma_window > y_view.size:
-            st.warning("Moving average: la ventana es mayor que la cantidad de puntos mostrados. Se ajustó automáticamente.")
-            ma_window_eff = int(max(1, y_view.size // 2 * 2 + 1))
-        else:
-            ma_window_eff = int(ma_window)
-        series[f"Moving avg (w={ma_window_eff})"] = moving_average(y_view, ma_window_eff)
-
-    if enable_lp:
-        if float(cutoff_hz) >= 0.5 * float(fs_hz):
-            st.error("Low-pass: cutoff debe ser < fs/2 (Nyquist). Bajá cutoff o subí fs.")
-        else:
-            try:
-                series[f"Low-pass (fc={cutoff_hz:g}Hz, order={order})"] = low_pass_butterworth(
+        try:
+            series[f"Low-pass (fc={cutoff_hz:g}Hz, order={order})"] = (
+                low_pass_butterworth(
                     y_view,
                     fs_hz=float(fs_hz),
                     cutoff_hz=float(cutoff_hz),
                     order=int(order),
                 )
-            except Exception as e:
-                st.warning(f"Low-pass no se pudo calcular: {e}")
+            )
+        except Exception as e:
+            st.warning(f"Low-pass no se pudo calcular: {e}")
 
-    if enable_kf:
-        try:
-            series[f"Kalman (q={_safe_float(q, 0):g}, r={_safe_float(r, 0):g})"] = kalman_1d(
+if enable_kf:
+    try:
+        series[f"Kalman (q={_safe_float(q, 0):g}, r={_safe_float(r, 0):g})"] = (
+            kalman_1d(
                 y_view,
                 q=float(q),
                 r=float(r),
             )
-        except Exception as e:
-            st.warning(f"Kalman no se pudo calcular: {e}")
+        )
+    except Exception as e:
+        st.warning(f"Kalman no se pudo calcular: {e}")
 
-    x_label = "index" if time_col == "(index)" else str(time_col)
-    x_axis_title = f"{x_label} ({time_unit})" if str(time_unit).strip() else x_label
+x_label = "index" if time_col == "(index)" else str(time_col)
+x_axis_title = f"{x_label} ({time_unit})" if str(time_unit).strip() else x_label
 
-    y_label = str(signal_col)
-    y_axis_title = f"{y_label} ({signal_unit})" if str(signal_unit).strip() else y_label
+y_label = str(signal_col)
+y_axis_title = f"{y_label} ({signal_unit})" if str(signal_unit).strip() else y_label
 
-    ui_revision = f"zoom:{st.session_state.zoom_revision}|time:{time_col}|signal:{signal_col}"
-    fig = _build_figure(
-        t_view,
-        y_view,
-        series,
-        ui_revision=ui_revision,
-        x_axis_title=x_axis_title,
-        y_axis_title=y_axis_title,
-    )
-    with a:
-        st.plotly_chart(fig, use_container_width=True)
+ui_revision = (
+    f"zoom:{st.session_state.zoom_revision}|time:{time_col}|signal:{signal_col}"
+)
+fig = _build_figure(
+    t_view,
+    y_view,
+    series,
+    ui_revision=ui_revision,
+    x_axis_title=x_axis_title,
+    y_axis_title=y_axis_title,
+)
+with a:
+    st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Preview de datos"):
-        st.dataframe(df.head(50), use_container_width=True)
+with st.expander("Preview de datos"):
+    st.dataframe(df.head(50), use_container_width=True)
