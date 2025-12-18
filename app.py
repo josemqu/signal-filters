@@ -52,7 +52,7 @@ def _value_kw(key: str, default):
 def _build_figure(
     t: np.ndarray,
     raw: np.ndarray,
-    series_by_name: dict[str, np.ndarray],
+    series: list[tuple[str, str, np.ndarray]],
     ui_revision: str,
     x_axis_title: str,
     y_axis_title: str,
@@ -70,14 +70,14 @@ def _build_figure(
         )
     )
 
-    for name, y in series_by_name.items():
+    for name, uid, y in series:
         fig.add_trace(
             go.Scatter(
                 x=t,
                 y=y,
                 mode="lines",
                 name=name,
-                uid=f"series::{name}",
+                uid=uid,
                 line=dict(width=2),
             )
         )
@@ -223,9 +223,13 @@ with st.sidebar:
         st.stop()
 
     default_signal = (
-        "X acceleration (Gs)"
-        if "X acceleration (Gs)" in numeric_cols
-        else numeric_cols[0]
+        "Y acceleration (Gs)"
+        if "Y acceleration (Gs)" in numeric_cols
+        else (
+            "X acceleration (Gs)"
+            if "X acceleration (Gs)" in numeric_cols
+            else numeric_cols[0]
+        )
     )
 
     desired_signal_col = str(st.session_state.get("signal_col", ""))
@@ -458,7 +462,7 @@ else:
     t_view = t
     y_view = y
 
-series: dict[str, np.ndarray] = {}
+series: list[tuple[str, str, np.ndarray]] = []
 
 if enable_ma:
     if ma_window > y_view.size:
@@ -468,19 +472,29 @@ if enable_ma:
         ma_window_eff = int(max(1, y_view.size // 2 * 2 + 1))
     else:
         ma_window_eff = int(ma_window)
-    series[f"Moving avg (w={ma_window_eff})"] = moving_average(y_view, ma_window_eff)
+    series.append(
+        (
+            f"Moving avg (w={ma_window_eff})",
+            "series::ma",
+            moving_average(y_view, ma_window_eff),
+        )
+    )
 
 if enable_lp:
     if float(cutoff_hz) >= 0.5 * float(fs_hz):
         st.error("Low-pass: cutoff debe ser < fs/2 (Nyquist). Bajá cutoff o subí fs.")
     else:
         try:
-            series[f"Low-pass (fc={cutoff_hz:g}Hz, order={order})"] = (
-                low_pass_butterworth(
-                    y_view,
-                    fs_hz=float(fs_hz),
-                    cutoff_hz=float(cutoff_hz),
-                    order=int(order),
+            series.append(
+                (
+                    f"Low-pass (fc={cutoff_hz:g}Hz, order={order})",
+                    "series::lp",
+                    low_pass_butterworth(
+                        y_view,
+                        fs_hz=float(fs_hz),
+                        cutoff_hz=float(cutoff_hz),
+                        order=int(order),
+                    ),
                 )
             )
         except Exception as e:
@@ -488,11 +502,15 @@ if enable_lp:
 
 if enable_kf:
     try:
-        series[f"Kalman (q={_safe_float(q, 0):g}, r={_safe_float(r, 0):g})"] = (
-            kalman_1d(
-                y_view,
-                q=float(q),
-                r=float(r),
+        series.append(
+            (
+                f"Kalman (q={_safe_float(q, 0):g}, r={_safe_float(r, 0):g})",
+                "series::kf",
+                kalman_1d(
+                    y_view,
+                    q=float(q),
+                    r=float(r),
+                ),
             )
         )
     except Exception as e:
